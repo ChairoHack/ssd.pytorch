@@ -37,6 +37,9 @@ def intersect(box_a, box_b):
     Return:
       (tensor) intersection area, Shape: [A,B].
     """
+    if torch.cuda.is_available():
+        box_a = box_a.cuda()
+        box_b = box_b.cuda()
     A = box_a.size(0)
     B = box_b.size(0)
     max_xy = torch.min(box_a[:, 2:].unsqueeze(1).expand(A, B, 2),
@@ -59,6 +62,9 @@ def jaccard(box_a, box_b):
     Return:
         jaccard overlap: (tensor) Shape: [box_a.size(0), box_b.size(0)]
     """
+    if torch.cuda.is_available():
+        box_a = box_a.cuda()
+        box_b = box_b.cuda()
     inter = intersect(box_a, box_b)
     area_a = ((box_a[:, 2]-box_a[:, 0]) *
               (box_a[:, 3]-box_a[:, 1])).unsqueeze(1).expand_as(inter)  # [A,B]
@@ -124,7 +130,9 @@ def encode(matched, priors, variances):
     Return:
         encoded boxes (tensor), Shape: [num_priors, 4]
     """
-
+    if torch.cuda.is_available():
+        matched = matched.cuda()
+        priors = priors.cuda()
     # dist b/t match center and prior's center
     g_cxcy = (matched[:, :2] + matched[:, 2:])/2 - priors[:, :2]
     # encode variance
@@ -184,6 +192,10 @@ def nms(boxes, scores, overlap=0.5, top_k=200):
         The indices of the kept boxes with respect to num_priors.
     """
 
+    if torch.cuda.is_available():
+        boxes = boxes.cuda()
+        scores = scores.cuda()
+
     keep = scores.new(scores.size(0)).zero_().long()
     if boxes.numel() == 0:
         return keep
@@ -193,6 +205,9 @@ def nms(boxes, scores, overlap=0.5, top_k=200):
     y2 = boxes[:, 3]
     area = torch.mul(x2 - x1, y2 - y1)
     v, idx = scores.sort(0)  # sort in ascending order
+
+    # if torch.cuda.is_available():
+    #     idx = idx.cuda()
     # I = I[v >= 0.01]
     idx = idx[-top_k:]  # indices of the top-k largest vals
     xx1 = boxes.new()

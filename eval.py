@@ -50,6 +50,8 @@ parser.add_argument('--voc_root', default=VOC_ROOT,
                     help='Location of VOC root directory')
 parser.add_argument('--cleanup', default=True, type=str2bool,
                     help='Cleanup and remove results files following eval')
+parser.add_argument('--eleven_point_metric', default=True, type=str2bool,
+                    help='Use the VOC 07 11 point metric')
 
 args = parser.parse_args()
 
@@ -66,12 +68,11 @@ if torch.cuda.is_available():
 else:
     torch.set_default_tensor_type('torch.FloatTensor')
 
-annopath = os.path.join(args.voc_root, 'VOC2007', 'Annotations', '%s.xml')
-imgpath = os.path.join(args.voc_root, 'VOC2007', 'JPEGImages', '%s.jpg')
-imgsetpath = os.path.join(args.voc_root, 'VOC2007', 'ImageSets',
+annopath = os.path.join(args.voc_root, 'datasets', 'Annotations', '%s.xml')
+imgpath = os.path.join(args.voc_root, 'datasets', 'JPEGImages', '%s.jpg')
+imgsetpath = os.path.join(args.voc_root, 'datasets', 'ImageSets',
                           'Main', '{:s}.txt')
-YEAR = '2007'
-devkit_path = args.voc_root + 'VOC' + YEAR
+devkit_path = args.voc_root + 'datasets'
 dataset_mean = (104, 117, 123)
 set_type = 'test'
 
@@ -170,9 +171,11 @@ def do_python_eval(output_dir='output', use_07=True):
         os.mkdir(output_dir)
     for i, cls in enumerate(labelmap):
         filename = get_voc_results_file_template(set_type, cls)
+        print(filename)
         rec, prec, ap = voc_eval(
            filename, annopath, imgsetpath.format(set_type), cls, cachedir,
            ovthresh=0.5, use_07_metric=use_07_metric)
+        print("eval_voc")
         aps += [ap]
         print('AP for {} = {:.4f}'.format(cls, ap))
         with open(os.path.join(output_dir, cls + '_pr.pkl'), 'wb') as f:
@@ -259,11 +262,13 @@ cachedir: Directory for caching the annotations
         os.mkdir(cachedir)
     cachefile = os.path.join(cachedir, 'annots.pkl')
     # read list of images
-    with open(imagesetfile, 'r') as f:
+    with open(f'data/VOCdevkit/GoogleOpenImages/ImageSets/Main/{imagesetfile}', 'r') as f:
         lines = f.readlines()
+    print(f'open file: data/VOCdevkit/GoogleOpenImages/ImageSets/Main/{imagesetfile}')
     imagenames = [x.strip() for x in lines]
     if not os.path.isfile(cachefile):
         # load annots
+        print('cachefile is not exist')
         recs = {}
         for i, imagename in enumerate(imagenames):
             recs[imagename] = parse_rec(annopath % (imagename))
@@ -276,12 +281,15 @@ cachedir: Directory for caching the annotations
             pickle.dump(recs, f)
     else:
         # load
+        print('cachefile is exist' + cachefile)
         with open(cachefile, 'rb') as f:
             recs = pickle.load(f)
 
     # extract gt objects for this class
     class_recs = {}
     npos = 0
+    print('[recs]')
+    print(recs)
     for imagename in imagenames:
         R = [obj for obj in recs[imagename] if obj['name'] == classname]
         bbox = np.array([x['bbox'] for x in R])
@@ -301,7 +309,7 @@ cachedir: Directory for caching the annotations
         splitlines = [x.strip().split(' ') for x in lines]
         image_ids = [x[0] for x in splitlines]
         confidence = np.array([float(x[1]) for x in splitlines])
-        BB = np.array([[float(z) for z in x[2:]] for x in splitlines])
+        BB = np.array([[float(z) - 1. for z in x[2:]] for x in splitlines])
 
         # sort by confidence
         sorted_ind = np.argsort(-confidence)
@@ -325,12 +333,12 @@ cachedir: Directory for caching the annotations
                 iymin = np.maximum(BBGT[:, 1], bb[1])
                 ixmax = np.minimum(BBGT[:, 2], bb[2])
                 iymax = np.minimum(BBGT[:, 3], bb[3])
-                iw = np.maximum(ixmax - ixmin, 0.)
-                ih = np.maximum(iymax - iymin, 0.)
+                iw = np.maximum(ixmax - ixmin + 1., 0.)
+                ih = np.maximum(iymax - iymin + 1., 0.)
                 inters = iw * ih
-                uni = ((bb[2] - bb[0]) * (bb[3] - bb[1]) +
-                       (BBGT[:, 2] - BBGT[:, 0]) *
-                       (BBGT[:, 3] - BBGT[:, 1]) - inters)
+                uni = ((bb[2] - bb[0] + 1.) * (bb[3] - bb[1] + 1.) +
+                       (BBGT[:, 2] - BBGT[:, 0] + 1.) *
+                       (BBGT[:, 3] - BBGT[:, 1] + 1.) - inters)
                 overlaps = inters / uni
                 ovmax = np.max(overlaps)
                 jmax = np.argmax(overlaps)
@@ -362,7 +370,7 @@ cachedir: Directory for caching the annotations
 
 
 def test_net(save_folder, net, cuda, dataset, transform, top_k,
-             im_size=300, thresh=0.05):
+             im_size=300, thresh=0.05, use_07=True):
     num_images = len(dataset)
     # all detections are collected into:
     #    all_boxes[cls][image] = N x 5 array of detections in
@@ -410,12 +418,12 @@ def test_net(save_folder, net, cuda, dataset, transform, top_k,
         pickle.dump(all_boxes, f, pickle.HIGHEST_PROTOCOL)
 
     print('Evaluating detections')
-    evaluate_detections(all_boxes, output_dir, dataset)
+    evaluate_detections(all_boxes, output_dir, dataset, use_07)
 
 
-def evaluate_detections(box_list, output_dir, dataset):
+def evaluate_detections(box_list, output_dir, dataset, use_07):
     write_voc_results_file(box_list, dataset)
-    do_python_eval(output_dir)
+    do_python_eval(output_dir, use_07)
 
 
 if __name__ == '__main__':
@@ -426,7 +434,7 @@ if __name__ == '__main__':
     net.eval()
     print('Finished loading model!')
     # load data
-    dataset = VOCDetection(args.voc_root, [('2007', set_type)],
+    dataset = VOCDetection(args.voc_root, [('2012', set_type)],
                            BaseTransform(300, dataset_mean),
                            VOCAnnotationTransform())
     if args.cuda:
@@ -435,4 +443,6 @@ if __name__ == '__main__':
     # evaluation
     test_net(args.save_folder, net, args.cuda, dataset,
              BaseTransform(net.size, dataset_mean), args.top_k, 300,
-             thresh=args.confidence_threshold)
+             thresh=args.confidence_threshold,
+             use_07=args.eleven_point_metric
+    )
